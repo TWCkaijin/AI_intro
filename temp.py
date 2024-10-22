@@ -47,12 +47,14 @@ class game:
         self.font = pg.font.Font(None, 24)
         self.board_tick = True
 
-        #CUDA args config
+        #Mother Board config
         global mother_board, device_board
-        mother_board = np.full(shape=(config.MonitorSize[0],config.MonitorSize[1],7),fill_value=-1) 
+        mother_board = np.full(shape=(config.MonitorSize[0],config.MonitorSize[1],7),fill_value=-1) # 800x600 x 每單位資料(force x, force y, velocity x, velocity y)
         device_board = cuda.to_device(mother_board)
-        # 800x600 x 每單位資料(force x, force y, velocity x, velocity y)
-        
+        self.update_monitor() #CUDA args config update
+
+        self.flock_board = None
+
 
 
     def draw_status(self, birds):
@@ -84,15 +86,20 @@ class game:
             self.clock.tick(self.fps)
 
         pg.quit()
-
-
+    
+    def update_cuda_config(self):
+        self.config_arr = np.array([config.Sight, config.alignmentFactor, config.cohesionFactor, config.separationFactor],dtype=np.float32)
+        self.board_tpb = (32,32) # threads per block
+        self.board_bpg_x = math.ceil(device_board.shape[0]/self.tpb[0])  # blocks per grid x
+        self.board_bpg_y = math.ceil(device_board.shape[1]/self.tpb[1])  # blocks per grid y
+        self.board_bpg = (self.board_bpg_x,self.board_bpg_y)     # blocks per grid
 
     def update_game(self,cluster_obj):
         bt = not self.board_tick
         ############################################################################################################
         # CUDA FUNCTION
         @cuda.jit
-        def update_cuda(board,config_arr,cx,cy):
+        def cuda_MotherBoardUpdate(board,config_arr,cx,cy):
             x,y = cuda.grid(2)
             if board[x][y][0] == 0 and board[x][y][1] == 0:
                 return
@@ -118,29 +125,38 @@ class game:
                 vx,vy = board[x][y][0],board[x][y][1]
                 board[x][y] = board[x+vx][y+vy]
                 board[x+vx][y+vy] = temp
-
+        ############################################################################################################
+        # CUDA Function
+        @cuda.jit
+        def update_flock_list(board,flock):
+            i = cuda.grid(1)
+            cx,cy = flock[i].p[0], flock[i].p[1]
+            flock[i].p[0] = cx + board[cx][cy][0]
+            flock[i].p[1] = cy + board[cx][cy][1]
         ############################################################################################################
         # change it into cuda
+
+        device_flock = cuda.to_device(cluster_obj.flock_pos)
+        flock_tpb = 256
+        blockspergrid = (device_flock.size + (flock_tpb - 1)) // flock_tpb
+        #device_inc_one[blockspergrid,threadsperblock](x_device)
         for bird in cluster_obj.flock:
             mother_board[int(bird.p[0]), int(bird.p[1])] = [bird.v[0], bird.v[1], 0, 0, 0, 0, 0] 
                                 # velocity_x, velocity_y, force_x, force_y, separation_total_x, separation_total_y, counter
                                 # ob          ob          cv       cv       sv                  sv                  sv    
                                 # ob = object, cv = combined value, sv = single value       
-        
-        ############################################################################################################
-        # CUDA Configuration
-        
-        config_arr_host = np.array([config.Sight, config.alignmentFactor, config.cohesionFactor, config.separationFactor],dtype=np.float32)
-        config_arr = cuda.to_device(config_arr_host)
-        threadsperblock = (32,32)
-        blockspergrid_x = math.ceil(device_board.shape[0]/threadsperblock[0])
-        blockspergrid_y = math.ceil(device_board.shape[1]/threadsperblock[1])
-        blockspergrid = (blockspergrid_x,blockspergrid_y)
+
         ############################################################################################################
         #call cuda function
-        for b in cluster_obj.flock:
-            update_cuda[blockspergrid,threadsperblock](device_board, config_arr, int(b.p[0]),int(b.p[1]))
 
+        for b in cluster_obj.flock:
+            cuda_MotherBoardUpdate[self.board_bpg,self.board_tpb](device_board, self.config_arr, int(b.p[0]),int(b.p[1]))
+
+
+        device_flock = cuda.to_device(cluster_obj.flock_pos)
+        flock_tpb = 256
+        flock_bpg = (device_flock.size + (flock_tpb - 1)) // flock_tpb
+        update_flock_list[blockspergrid,threadsperblock](x_device)
         ############################################################################################################
         cuda.synchronize()
         mother_board = device_board.copy_to_host()
@@ -156,6 +172,7 @@ class game:
 class birds:
     def __init__(self,flock_size,main_root):
         self.flock = np.array([ bird(self) for _ in range(flock_size) ], dtype=bird)
+        self.flock_pos = np.array([ self.flock[i].p for i in range(flock_size) ], dtype=pg.Vector2)
         self.root = main_root
         self.t = 0
 
