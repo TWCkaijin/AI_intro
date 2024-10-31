@@ -51,13 +51,15 @@ class Game:
                 elif event.type == pg.VIDEORESIZE:
                     resize = True
                     config.tempMonitorSize = (event.w, event.h)
-
-            self.screen.fill(color.white)
-            birds.update()
-            birds.draw(self.screen)
-            self.draw_status(birds)
-            pg.display.flip()
-            self.clock.tick(self.fps)
+            try : 
+                self.screen.fill(color.white)
+                birds.update()
+                birds.draw(self.screen)
+                self.draw_status(birds)
+                pg.display.flip()
+            except Exception as e:
+                print(e)
+                self.clock.tick(self.fps)
 
             if resize:
                 new_size = config.tempMonitorSize[0] * config.tempMonitorSize[1]
@@ -103,7 +105,7 @@ class Bird:
 
                 alignment_total += np.array([bird.v.x, bird.v.y])
                 cohesion_total += np.array([vector.x, vector.y])
-                separation_total += -np.array([vector.x, vector.y]) / (distance ** 2) * config.Sight
+                separation_total += -np.array([vector.x, vector.y]) / ((distance if distance else 1) ** 2) * config.Sight
 
         if total != 0:
             alignment_total /= total
