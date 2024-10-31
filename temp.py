@@ -1,13 +1,11 @@
 # *-* coding: utf-8 *-*
 
 import pygame as pg
-from threading import Thread as th 
 import numpy as np
 import math
 from numba import cuda
 import os
 import concurrent.futures
-
 
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
 os.environ["PYGAME_DETECT_AVX2"] = "1"
@@ -49,13 +47,17 @@ class game:
 
         #Mother Board config
         global mother_board, device_board
-        mother_board = np.full(shape=(config.MonitorSize[0],config.MonitorSize[1],7),fill_value=-1) # 800x600 x 每單位資料(force x, force y, velocity x, velocity y)
+        mother_board = np.full(shape=(config.MonitorSize[0], config.MonitorSize[1], 7), fill_value=-1) # 800x600 x 每單位資料(force x, force y, velocity x, velocity y)
         device_board = cuda.to_device(mother_board)
-        self.update_monitor() #CUDA args config update
 
-        self.flock_board = None
+        self.board_tpb = (16, 16)
+        self.board_bpg_x = math.ceil(device_board.shape[0] / self.board_tpb[0])
+        self.board_bpg_y = math.ceil(device_board.shape[1] / self.board_tpb[1])
+        self.board_bpg = (self.board_bpg_x, self.board_bpg_y)
 
-
+        # config into a array
+        self.config_arr = np.array([config.Sight, config.alignmentFactor, config.cohesionFactor, config.separationFactor], dtype=np.float32)
+        self.config_arr_device = cuda.to_device(self.config_arr)
 
     def draw_status(self, birds):
         fps = self.clock.get_fps()
@@ -65,114 +67,75 @@ class game:
         screen.blit(text_surface, (10, 10))
 
     def run(self, birds):
-        temp = config.MonitorSize[0] * config.MonitorSize[1]
         while self.running:
             for event in pg.event.get():
                 if event.type == pg.QUIT:
                     self.running = False
-                elif event.type == pg.VIDEORESIZE:
-                    config.MonitorSize = (event.w, event.h)
-                    new_size = event.w * event.h
-                    if new_size > temp:
-                        birds.add(int((new_size - temp) * config.flock_ratio))
-                    else:
-                        birds.delete(int((temp - new_size) * config.flock_ratio))
-                    temp = new_size
-
+            
             screen.fill(color.white)
             birds.update()
             self.draw_status(birds)
             pg.display.flip()
             self.clock.tick(self.fps)
-
+            
         pg.quit()
-    
-    def update_cuda_config(self):
-        self.config_arr = np.array([config.Sight, config.alignmentFactor, config.cohesionFactor, config.separationFactor],dtype=np.float32)
-        self.board_tpb = (32,32) # threads per block
-        self.board_bpg_x = math.ceil(device_board.shape[0]/self.tpb[0])  # blocks per grid x
-        self.board_bpg_y = math.ceil(device_board.shape[1]/self.tpb[1])  # blocks per grid y
-        self.board_bpg = (self.board_bpg_x,self.board_bpg_y)     # blocks per grid
 
-    def update_game(self,cluster_obj):
-        bt = not self.board_tick
+    def update_game(self, cluster_obj):
         ############################################################################################################
         # CUDA FUNCTION
         @cuda.jit
-        def cuda_MotherBoardUpdate(board,config_arr,cx,cy):
-            x,y = cuda.grid(2)
-            if board[x][y][0] == 0 and board[x][y][1] == 0:
-                return
-            r = (cx-x)**2 + (cy-y)**2
-            if r==0:
-                return
-            if(r < config_arr[0]):
-                board[x][y][2] += board[cx][cy][0]*config_arr[1] + cx*config_arr[2]
-                board[x][y][3] += board[cx][cy][1]*config_arr[1] + cy*config_arr[2]
-                board[x][y][4] += (-x/(r*r)) * config_arr[0]*config_arr[3]
-                board[x][y][5] += (-y/(r*r)) * config_arr[0]*config_arr[3]
-                board[x][y][6] += 1
+        def cuda_MotherBoardUpdate(board, config_arr, cx, cy):
+            x, y = cuda.grid(2)
+            if x < board.shape[0] and y < board.shape[1]:
+                if board[x, y, 0] == 0 and board[x, y, 1] == 0:
+                    return
+                r = (cx - x) ** 2 + (cy - y) ** 2
+                if r == 0:
+                    return
+                if r < config_arr[0]:
+                    board[x, y, 2] += board[cx, cy, 0] * config_arr[1] + cx * config_arr[2]
+                    board[x, y, 3] += board[cx, cy, 1] * config_arr[1] + cy * config_arr[2]
+                    board[x, y, 4] += (-x / (r * r)) * config_arr[0] * config_arr[3]
+                    board[x, y, 5] += (-y / (r * r)) * config_arr[0] * config_arr[3]
+                    board[x, y, 6] += 1
 
         ############################################################################################################
         # CUDA FUNCTION
         @cuda.jit
-        def update_cuda_pos(board,cx,cy):
-            x,y = cuda.grid(2)
-            if(x==cx and y==cy):
-                temp = board[x][y].copy()
-                """ might be a problem"""
-
-                vx,vy = board[x][y][0],board[x][y][1]
-                board[x][y] = board[x+vx][y+vy]
-                board[x+vx][y+vy] = temp
-        ############################################################################################################
-        # CUDA Function
-        @cuda.jit
-        def update_flock_list(board,flock):
+        def update_flock_list(board, d_flock):
             i = cuda.grid(1)
-            cx,cy = flock[i].p[0], flock[i].p[1]
-            flock[i].p[0] = cx + board[cx][cy][0]
-            flock[i].p[1] = cy + board[cx][cy][1]
-        ############################################################################################################
-        # change it into cuda
+            if i < d_flock.shape[0]:
+                cx, cy = int(d_flock[i, 0]), int(d_flock[i, 1])
+                d_flock[i, 0] = cx + board[cx, cy, 0]
+                d_flock[i, 1] = cy + board[cx, cy, 1]
 
-        device_flock = cuda.to_device(cluster_obj.flock_pos)
-        flock_tpb = 256
-        blockspergrid = (device_flock.size + (flock_tpb - 1)) // flock_tpb
-        #device_inc_one[blockspergrid,threadsperblock](x_device)
+        ############################################################################################################
+        # 更新母板
         for bird in cluster_obj.flock:
-            mother_board[int(bird.p[0]), int(bird.p[1])] = [bird.v[0], bird.v[1], 0, 0, 0, 0, 0] 
-                                # velocity_x, velocity_y, force_x, force_y, separation_total_x, separation_total_y, counter
-                                # ob          ob          cv       cv       sv                  sv                  sv    
-                                # ob = object, cv = combined value, sv = single value       
+            mother_board[int(bird.p[0]), int(bird.p[1])] = [bird.v[0], bird.v[1], 0, 0, 0, 0, 0]
 
-        ############################################################################################################
-        #call cuda function
+        # 將更新後的母板傳輸到設備
+        device_board = cuda.to_device(mother_board)
 
+        # 呼叫 CUDA 核心函數
         for b in cluster_obj.flock:
-            cuda_MotherBoardUpdate[self.board_bpg,self.board_tpb](device_board, self.config_arr, int(b.p[0]),int(b.p[1]))
-
+            cuda_MotherBoardUpdate[self.board_bpg, self.board_tpb](device_board, self.config_arr_device, int(b.p[0]), int(b.p[1]))
 
         device_flock = cuda.to_device(cluster_obj.flock_pos)
         flock_tpb = 256
         flock_bpg = (device_flock.size + (flock_tpb - 1)) // flock_tpb
-        update_flock_list[blockspergrid,threadsperblock](x_device)
-        ############################################################################################################
-        cuda.synchronize()
-        mother_board = device_board.copy_to_host()
-        for bird in cluster_obj.flock:
-            x,y = int(bird.p[0]),int(bird.p[1])
-            if(mother_board[x,y][6] != 0):
-                bird.f[0] = mother_board[x,y][2]/mother_board[x,y][6] # force_x / counter
-                bird.f[1] = mother_board[x,y][3]/mother_board[x,y][6] # force_y / counter
-            bird.f[0] += mother_board[x,y][4]
-            bird.f[1] += mother_board[x,y][5]
+        update_flock_list[flock_bpg, flock_tpb](device_board, device_flock)
 
+        # 在完成 kernel 運算之後提取被更改的資料
+        cuda.synchronize()
+        device_flock = device_flock.copy_to_host()
+        for index in range(len(cluster_obj.flock)):
+            cluster_obj.flock[index].p = device_flock[index]
 
 class birds:
-    def __init__(self,flock_size,main_root):
-        self.flock = np.array([ bird(self) for _ in range(flock_size) ], dtype=bird)
-        self.flock_pos = np.array([ self.flock[i].p for i in range(flock_size) ], dtype=pg.Vector2)
+    def __init__(self, flock_size, main_root):
+        self.flock = np.array([bird(self) for _ in range(flock_size)], dtype=bird)
+        self.flock_pos = np.array([[self.flock[i].p[0], self.flock[i].p[1]] for i in range(flock_size)])
         self.root = main_root
         self.t = 0
 
@@ -188,32 +151,26 @@ class birds:
         self.root.update_game(self)
         with concurrent.futures.ThreadPoolExecutor() as executor:
             executor.map(lambda b: b.next_tick(), self.flock)
-            
-
 
 class bird(pg.sprite.Sprite):
-
-    def __init__(self,pt:birds):
+    def __init__(self, pt: birds):
         super().__init__()
         self.p = pg.Vector2(np.random.uniform(0, config.MonitorSize[0]), np.random.uniform(0, config.MonitorSize[1]))  # 隨機 x, y
         self.v = pg.Vector2(np.random.uniform(-config.InitVel, config.InitVel), np.random.uniform(-config.InitVel, config.InitVel))  # 隨機 x, y
         self.f = pg.Vector2(0, 0)
         self.pattern = pt
 
-
     def next_tick(self):
-        #input()
         self.v += self.f
         self.limit_speed()
         self.p += self.v
         self.handle_boundaries()
+        self.update_sprite()
         self.draw()
-    
 
     def limit_speed(self):
         if self.v.length() > config.MaxVel:
             self.v.scale_to_length(config.MaxVel)
-
 
     def handle_boundaries(self):
         stage_size = pg.Vector2(config.MonitorSize)
@@ -227,38 +184,18 @@ class bird(pg.sprite.Sprite):
         elif self.p.y > stage_size.y:
             self.p.y -= stage_size.y
 
-
     def update_sprite(self):
-        self.rect.x = self.p.x
-        self.rect.y = self.p.y
+        self.rect = pg.Rect(self.p.x, self.p.y, 10, 10)
+        self.image = pg.Surface((10, 10), pg.SRCALPHA)
+        pg.draw.polygon(self.image, (255, 0, 0), [(5, 0), (0, 10), (10, 10)])
         self.image = pg.transform.rotate(self.image, -self.v.angle_to(pg.Vector2(1, 0)))
 
-
     def draw(self):
-        size = 10  
-        angle = self.v.angle_to(pg.Vector2(1, 0))
-        triangle_surface = pg.Surface((size * 2, size * 2), pg.SRCALPHA)
-        pg.draw.polygon(triangle_surface, (255, 0, 0), [(size, 0), (0, size * 4), (size * 2, size * 4)])
-        rotated_surface = pg.transform.rotate(triangle_surface, 270 + angle)
-        rotated_rect = rotated_surface.get_rect(center=(self.p.x, self.p.y))
-        screen.blit(rotated_surface, rotated_rect.topleft)
-
-
-
+        screen.blit(self.image, self.rect.topleft)
 
 if __name__ == '__main__':
     cuda.select_device(0)
-    screen = pg.display.set_mode(config.MonitorSize, pg.RESIZABLE)
+    screen = pg.display.set_mode(config.MonitorSize)
     g = game()
     b = birds(config.BirdNumber, g)
-
-
-
-    g = game()
-    b = birds(config.BirdNumber,g)
     g.run(b)
-
-
-    
-
-

@@ -13,6 +13,7 @@ class color:
 
 class config:
     MonitorSize = (800, 600)
+    tempMonitorSize = (800, 600)
     FrameRate = 120
     MaxVel = 3
     MinVel = 1
@@ -43,17 +44,13 @@ class Game:
     def run(self, birds):
         temp = config.MonitorSize[0] * config.MonitorSize[1]
         while self.running:
+            resize = False
             for event in pg.event.get():
                 if event.type == pg.QUIT:
                     self.running = False
                 elif event.type == pg.VIDEORESIZE:
-                    config.MonitorSize = (event.w, event.h)
-                    new_size = event.w * event.h
-                    if new_size > temp:
-                        birds.add(int((new_size - temp) * config.flock_ratio))
-                    else:
-                        birds.delete(int((temp - new_size) * config.flock_ratio))
-                    temp = new_size
+                    resize = True
+                    config.tempMonitorSize = (event.w, event.h)
 
             self.screen.fill(color.white)
             birds.update()
@@ -62,6 +59,14 @@ class Game:
             pg.display.flip()
             self.clock.tick(self.fps)
 
+            if resize:
+                new_size = config.tempMonitorSize[0] * config.tempMonitorSize[1]
+                if new_size > temp:
+                    birds.add(int((new_size - temp) * config.flock_ratio))
+                else:
+                    birds.delete(int((temp - new_size) * config.flock_ratio))
+                temp = new_size
+                config.MonitorSize = config.tempMonitorSize
         pg.quit()
 
 class Bird:
