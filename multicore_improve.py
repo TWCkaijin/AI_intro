@@ -25,6 +25,37 @@ class config:
     cohesionFactor = 0.2
     separationFactor = 1.5
 
+class Slider:
+    def __init__(self, x, y, w, h, min_val, max_val, start_val, label,show_float=True):
+        self.rect = pg.Rect(x, y, w, h)
+        self.min_val = min_val
+        self.max_val = max_val
+        self.value = start_val
+        self.label = label
+        self.dragging = False
+        self.show_float = show_float
+
+    def handle_event(self, event):
+        if event.type == pg.MOUSEBUTTONDOWN:
+            if self.rect.collidepoint(event.pos):
+                self.dragging = True
+        elif event.type == pg.MOUSEBUTTONUP:
+            self.dragging = False
+        elif event.type == pg.MOUSEMOTION:
+            if self.dragging:
+                self.value = (event.pos[0] - self.rect.x) / self.rect.w * (self.max_val - self.min_val) + self.min_val
+                self.value = max(self.min_val, min(self.value, self.max_val))
+
+    def draw(self, screen):
+        pg.draw.rect(screen, color.black, self.rect, 2)
+        pg.draw.rect(screen, color.red, (self.rect.x, self.rect.y, (self.value - self.min_val) / (self.max_val - self.min_val) * self.rect.w, self.rect.h))
+        font = pg.font.Font(None, 24)
+        if self.show_float:
+            text = font.render(f"{self.label}: {self.value:.2f}", True, color.black)
+        else:
+            text = font.render(f"{self.label}: {int(self.value)}", True, color.black)
+        screen.blit(text, (self.rect.x, self.rect.y - 25))
+
 class Game:
     def __init__(self):
         pg.init()
@@ -33,6 +64,12 @@ class Game:
         self.clock = pg.time.Clock()
         self.fps = config.FrameRate
         self.font = pg.font.Font(None, 24)
+        self.sliders = [
+            Slider(10, 50, 100, 10, -1.0, 1.0, config.alignmentFactor, "Alignment"),
+            Slider(10, 100, 100, 10, -1.0, 1.0, config.cohesionFactor, "Cohesion"),
+            Slider(10, 150, 100, 10, 0, 2.0, config.separationFactor, "Separation"),
+            Slider(10, 200, 100, 10, 0, 800, config.BirdNumber, "bird number",show_float=False)
+        ]
 
     def draw_status(self, birds):
         fps = self.clock.get_fps()
@@ -51,11 +88,16 @@ class Game:
                 elif event.type == pg.VIDEORESIZE:
                     resize = True
                     config.tempMonitorSize = (event.w, event.h)
-            try : 
+                for slider in self.sliders:
+                    slider.handle_event(event)
+
+            try:
                 self.screen.fill(color.white)
                 birds.update()
                 birds.draw(self.screen)
                 self.draw_status(birds)
+                for slider in self.sliders:
+                    slider.draw(self.screen)
                 pg.display.flip()
                 self.clock.tick(self.fps)
             except Exception as e:
@@ -70,6 +112,18 @@ class Game:
                     birds.delete(int((temp - new_size) * config.flock_ratio))
                 temp = new_size
                 config.MonitorSize = config.tempMonitorSize
+
+            # 更新 config 的數值
+            config.alignmentFactor = self.sliders[0].value
+            config.cohesionFactor = self.sliders[1].value
+            config.separationFactor = self.sliders[2].value
+            if (self.sliders[3].value>config.BirdNumber):
+                birds.add(int(self.sliders[3].value-config.BirdNumber))
+                config.BirdNumber = int(self.sliders[3].value)
+            elif (self.sliders[3].value<config.BirdNumber):
+                birds.delete(int(config.BirdNumber-self.sliders[3].value))
+                config.BirdNumber = int(self.sliders[3].value)
+
         pg.quit()
 
 class Bird:
@@ -174,7 +228,3 @@ if __name__ == "__main__":
     g = Game()
     b = Birds(config.BirdNumber)
     g.run(b)
-
-
-
-    
