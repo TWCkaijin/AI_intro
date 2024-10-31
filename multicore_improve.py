@@ -57,6 +57,7 @@ class Game:
                 birds.draw(self.screen)
                 self.draw_status(birds)
                 pg.display.flip()
+                self.clock.tick(self.fps)
             except Exception as e:
                 print(e)
                 self.clock.tick(self.fps)
