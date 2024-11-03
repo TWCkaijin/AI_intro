@@ -3,7 +3,7 @@ from scipy.spatial import cKDTree
 import concurrent.futures
 import pygame as pg
 import random
-
+import math
 class Color:
     white = (255, 255, 255)
     black = (0, 0, 0)
@@ -42,6 +42,8 @@ class config:
     cohesionFactor = 1
     #分離力參數
     separationFactor = 1.5
+    #牆壁避免力參數
+    wallAvoidanceFactor = 0.5
     ####################
 
 class Slider:
@@ -91,6 +93,9 @@ class Game:
             Slider(10, 170, 100, 10, 0, 8, config.MaxVel, "speed"),
             Slider(10, 210, 100, 10, 0, 500, config.BirdNumber, "Bird Number",show_float=False)
         ]
+        self.walls = []  # 儲存牆壁的列表
+        self.drawing_wall = False  # 是否正在繪製牆壁
+        self.wall_start_pos = None  # 牆壁的起始位置
 
     def draw_status(self, birds):
         fps = self.clock.get_fps()
@@ -99,26 +104,47 @@ class Game:
         text_surface = self.font.render(status, True, Color.white)
         self.screen.blit(text_surface, (10, 10))
 
+    def draw_walls(self):
+        for wall in self.walls:
+            start, end = wall
+            pg.draw.line(self.screen, Color.green, start, end, width=5)
+
     def run(self, birds):
         while self.running:
             resize = False
             for event in pg.event.get():
                 if event.type == pg.QUIT:
                     self.running = False
+
                 elif event.type == pg.VIDEORESIZE:
                     resize = True
                     config.tempMonitorSize = (event.w, event.h)
+
                 elif event.type == pg.MOUSEBUTTONDOWN:
-                    for bird in birds.flock:
+                    """ for bird in birds.flock:
                         if bird.is_clicked(event.pos):
-                            bird.color = Color.red
+                            bird.color = Color.red """
+                    
+                    if event.button == 1:  # 左鍵繪製牆壁
+                        self.drawing_wall = True
+                        self.wall_start_pos = event.pos
+                    elif event.button == 3:  # 右鍵刪除牆壁
+                        self.delete_wall_at(event.pos)
+
+                elif event.type == pg.MOUSEBUTTONUP:
+                    if event.button == 1 and self.drawing_wall:
+                        self.drawing_wall = False
+                        wall_end_pos = event.pos
+                        self.walls.append((self.wall_start_pos, wall_end_pos))
+
                 for slider in self.sliders:
                     slider.handle_event(event) 
 
             try:
                 self.screen.fill(Color.black)
-                birds.update()
+                birds.update(self.walls)
                 birds.draw(self.screen)
+                self.draw_walls()
                 self.draw_status(birds)
 
                 for slider in self.sliders:
@@ -150,6 +176,30 @@ class Game:
             #################################
         pg.quit()
 
+    def delete_wall_at(self, pos):
+        for wall in self.walls:
+            if self.is_point_near_line(pos, wall[0], wall[1], threshold=10):
+                self.walls.remove(wall)
+                break
+
+def is_point_near_line(self, point, start, end, threshold):
+    # 檢查點是否在線段附近，使用點到線段的距離公式
+    px, py = point
+    x1, y1 = start
+    x2, y2 = end
+    dx = x2 - x1
+    dy = y2 - y1
+    if dx == dy == 0:
+        # 線段起點和終點相同
+        distance = math.hypot(px - x1, py - y1)
+        return distance <= threshold
+    t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy)
+    t = max(0, min(1, t))
+    nearest_x = x1 + t * dx
+    nearest_y = y1 + t * dy
+    distance = math.hypot(px - nearest_x, py - nearest_y)
+    return distance <= threshold
+
 class Bird:
     def __init__(self, pattern,color):
         self.pattern = pattern
@@ -163,7 +213,7 @@ class Bird:
         dy = other_pos[1] + offset[1] * config.MonitorSize[1] - self.p.y
         return pg.Vector2(dx, dy)
 
-    def generate_force(self, positions, offsets, tree):
+    def generate_force(self, positions, offsets, tree, walls):
         self.f.x = 0
         self.f.y = 0
 
@@ -201,8 +251,11 @@ class Bird:
             self.f += cohesion_avg * config.cohesionFactor
             self.f += separation_total * config.separationFactor
 
-    def update(self, positions, offsets, tree):
-        self.generate_force(positions, offsets, tree)
+        wall_avoidance_force = self.avoid_walls(walls)
+        self.f += wall_avoidance_force * config.wallAvoidanceFactor
+
+    def update(self, positions, offsets, tree, walls):
+        self.generate_force(positions, offsets, tree, walls)
         self.v += self.f
         if self.v.length() > config.MaxVel:
             self.v.scale_to_length(config.MaxVel)
@@ -228,6 +281,31 @@ class Bird:
         size = 10
         rect = pg.Rect(self.p.x - size, self.p.y - size, size * 2, size * 2)
         return rect.collidepoint(mouse_pos)
+    
+    def avoid_walls(self, walls):
+        avoid_force = pg.Vector2(0, 0)
+        for wall in walls:
+            start, end = wall
+            nearest_point = self.get_nearest_point_on_line(self.p, start, end)
+            distance = self.p.distance_to(nearest_point)
+            if distance < config.Sight:
+                # 計算避開牆壁的力，與牆壁垂直，方向遠離牆壁
+                direction = self.p - nearest_point
+                if direction.length() > 0:
+                    direction.normalize_ip()
+                    avoid_force += direction * (config.Sight - distance)
+        return avoid_force
+
+    def get_nearest_point_on_line(self, point, start, end):
+        # 計算點到線段的最近點
+        line_vec = pg.Vector2(end) - pg.Vector2(start)
+        point_vec = pg.Vector2(point) - pg.Vector2(start)
+        line_len = line_vec.length()
+        line_unitvec = line_vec.normalize()
+        proj_length = point_vec.dot(line_unitvec)
+        proj_length = max(0, min(line_len, proj_length))
+        nearest = pg.Vector2(start) + line_unitvec * proj_length
+        return nearest
 
 class Birds:
     def __init__(self, flock_size, flock_Color=Color.white):
@@ -243,7 +321,7 @@ class Birds:
         else:
             self.flock = self.flock[:-count]
 
-    def update(self):
+    def update(self,walls):
         positions = np.array([[bird.p.x, bird.p.y] for bird in self.flock])
         N = len(self.flock)
 
@@ -267,7 +345,7 @@ class Birds:
         tree = cKDTree(all_positions)
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.map(lambda b: b.update(all_positions, all_offsets, tree), self.flock)
+            executor.map(lambda b: b.update(all_positions, all_offsets, tree,  walls), self.flock)
 
     # 鳥群繪製
     def draw(self, screen):
