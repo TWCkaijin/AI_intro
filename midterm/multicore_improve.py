@@ -4,18 +4,23 @@ import concurrent.futures
 import pygame as pg
 import random
 
+
+
+
+
 class Color:
-    white = (255, 255, 255)
-    black = (0, 0, 0)
+    white = (220,220,220)
+    black = (25, 25, 25)
     red = (255, 0, 0)
     green = (0, 255, 0)
     blue = (0, 0, 255)
 
+
 class config:
     #畫面大小
-    MonitorSize = (800, 600)
+    MonitorSize = (800,600)
     #畫面大小暫存
-    tempMonitorSize = (800, 600)
+    tempMonitorSize = MonitorSize
 
     #幀率
     FrameRate = 120
@@ -25,7 +30,7 @@ class config:
     #最小速度
     MinVel = 1
     #初始速度
-    InitVel = 5
+    InitVel = 2
     
     #鳥數PIXEL比例
     flock_ratio = 1/2500
@@ -35,13 +40,13 @@ class config:
     #鳥數
     BirdNumber = 150
     #視野
-    Sight = 30
+    Sight = 100
     #對齊力參數
     alignmentFactor = 2
     #聚集力參數
-    cohesionFactor = 1
+    cohesionFactor = 0.8
     #分離力參數
-    separationFactor = 1.5
+    separationFactor = 3.5
     ####################
 
 class Slider:
@@ -66,13 +71,13 @@ class Slider:
                 self.value = max(self.min_val, min(self.value, self.max_val))
 
     def draw(self, screen):
-        pg.draw.rect(screen, Color.white, self.rect, 2)
+        pg.draw.rect(screen, Color.black, self.rect, 2)
         pg.draw.rect(screen, Color.red, (self.rect.x, self.rect.y, (self.value - self.min_val) / (self.max_val - self.min_val) * self.rect.w, self.rect.h))
         font = pg.font.Font(None, 18)
         if self.show_float:
-            text = font.render(f"{self.label}: {self.value:.2f}", True, Color.white)
+            text = font.render(f"{self.label}: {self.value:.2f}", True, Color.black)
         else:
-            text = font.render(f"{self.label}: {int(self.value)}", True, Color.white)
+            text = font.render(f"{self.label}: {int(self.value)}", True, Color.black)
         screen.blit(text, (self.rect.x, self.rect.y - 15))
 
 class Game:
@@ -95,8 +100,8 @@ class Game:
     def draw_status(self, birds):
         fps = self.clock.get_fps()
         bird_count = len(birds.flock)
-        status = f"FPS: {fps:.2f} | Bird Count: {bird_count}"
-        text_surface = self.font.render(status, True, Color.white)
+        status = f"FPS: {fps:.2f} | Bird Count: {bird_count} | Monitor Size: {config.MonitorSize[0]}x{config.MonitorSize[1]}"
+        text_surface = self.font.render(status, True, Color.black)
         self.screen.blit(text_surface, (10, 10))
 
     def run(self, birds):
@@ -116,14 +121,18 @@ class Game:
                     slider.handle_event(event) 
 
             try:
-                self.screen.fill(Color.black)
+                self.screen.fill(Color.white)
                 birds.update()
                 birds.draw(self.screen)
-                self.draw_status(birds)
 
+                #################################
+                ########### 參數+Slider draw ###########
+                self.draw_status(birds)
                 for slider in self.sliders:
                     slider.draw(self.screen)
-
+                ########### 參數+Slider draw ###########
+                #################################   
+                
                 pg.display.flip()
                 self.clock.tick(self.fps)
             except Exception as e:
@@ -148,6 +157,7 @@ class Game:
                 config.BirdNumber = int(self.sliders[-1].value)
             ########### 參數update ##########
             #################################
+
         pg.quit()
 
 class Bird:
@@ -163,7 +173,7 @@ class Bird:
         dy = other_pos[1] + offset[1] * config.MonitorSize[1] - self.p.y
         return pg.Vector2(dx, dy)
 
-    def generate_force(self, positions, offsets, tree):
+    def generate_force(self, offsets, tree):
         self.f.x = 0
         self.f.y = 0
 
@@ -201,8 +211,8 @@ class Bird:
             self.f += cohesion_avg * config.cohesionFactor
             self.f += separation_total * config.separationFactor
 
-    def update(self, positions, offsets, tree):
-        self.generate_force(positions, offsets, tree)
+    def update(self, offsets, tree):
+        self.generate_force( offsets, tree)
         self.v += self.f
         if self.v.length() > config.MaxVel:
             self.v.scale_to_length(config.MaxVel)
@@ -230,7 +240,7 @@ class Bird:
         return rect.collidepoint(mouse_pos)
 
 class Birds:
-    def __init__(self, flock_size, flock_Color=Color.white):
+    def __init__(self, flock_size, flock_Color=Color.black):
         self.flock = np.array([Bird(self,flock_Color) for _ in range(flock_size)], dtype=Bird)
         self.color = flock_Color
     def add(self, count):
@@ -267,7 +277,7 @@ class Birds:
         tree = cKDTree(all_positions)
 
         with concurrent.futures.ThreadPoolExecutor() as executor:
-            executor.map(lambda b: b.update(all_positions, all_offsets, tree), self.flock)
+            executor.map(lambda b: b.update(all_offsets, tree), self.flock)
 
     # 鳥群繪製
     def draw(self, screen):
@@ -275,7 +285,15 @@ class Birds:
             executor.map(lambda b: b.draw(screen), self.flock)
 
 if __name__ == "__main__":
+    mode = "light"
+    if mode == "light":
+        Color.white = (220,220,220)
+        Color.black = (25, 25, 25)
+    elif mode == "dark":
+        Color.white = (25, 25, 25)
+        Color.black = (220,220,220)
+
     g = Game()
-    Specie_A = Birds(config.BirdNumber,Color.white)
+    Specie_A = Birds(config.BirdNumber,Color.black)
     #Specie_B = Birds(config.BirdNumber,flock_Color=Color.blue)
     g.run(Specie_A)
