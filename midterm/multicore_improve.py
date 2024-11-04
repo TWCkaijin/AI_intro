@@ -59,7 +59,7 @@ class Slider:
         self.dragging = False
         self.show_float = show_float
 
-    def handle_event(self, event): 
+    def handle_event(self, event) -> bool: 
         if event.type == pg.MOUSEBUTTONDOWN:
             if self.rect.collidepoint(event.pos):
                 self.dragging = True
@@ -69,6 +69,7 @@ class Slider:
             if self.dragging:
                 self.value = (event.pos[0] - self.rect.x) / self.rect.w * (self.max_val - self.min_val) + self.min_val
                 self.value = max(self.min_val, min(self.value, self.max_val))
+        return self.dragging
 
     def draw(self, screen):
         pg.draw.rect(screen, Color.black, self.rect, 2)
@@ -106,6 +107,7 @@ class Game:
     def run(self, birds):
         while self.running:
             resize = False
+            configChange = False
             for event in pg.event.get():
                 if event.type == pg.QUIT:
                     self.running = False
@@ -117,7 +119,7 @@ class Game:
                         if bird.is_clicked(event.pos):
                             bird.color = Color.red
                 for slider in self.sliders:
-                    slider.handle_event(event) 
+                    configChange += slider.handle_event(event)
 
             try:
                 self.screen.fill(Color.white)
@@ -138,22 +140,25 @@ class Game:
                 print(e)
                 self.clock.tick(self.fps)
 
-            if resize:
-                config.MonitorSize = config.tempMonitorSize
+            
 
             #################################
             ########### 參數update ##########
-            config.alignmentFactor = self.sliders[0].value
-            config.cohesionFactor = self.sliders[1].value
-            config.separationFactor = self.sliders[2].value
-            config.Sight = self.sliders[3].value
-            config.MaxVel = self.sliders[4].value
-            if (self.sliders[-1].value>config.BirdNumber):
-                birds.add(int(self.sliders[-1].value-config.BirdNumber))
-                config.BirdNumber = int(self.sliders[-1].value)
-            elif (self.sliders[-1].value<config.BirdNumber):
-                birds.delete(int(config.BirdNumber-self.sliders[-1].value))
-                config.BirdNumber = int(self.sliders[-1].value)
+            if resize:
+                config.MonitorSize = config.tempMonitorSize
+
+            if configChange:
+                config.alignmentFactor = self.sliders[0].value
+                config.cohesionFactor = self.sliders[1].value
+                config.separationFactor = self.sliders[2].value
+                config.Sight = self.sliders[3].value
+                config.MaxVel = self.sliders[4].value
+                if (self.sliders[-1].value>config.BirdNumber):
+                    birds.add(int(self.sliders[-1].value-config.BirdNumber))
+                    config.BirdNumber = int(self.sliders[-1].value)
+                elif (self.sliders[-1].value<config.BirdNumber):
+                    birds.delete(int(config.BirdNumber-self.sliders[-1].value))
+                    config.BirdNumber = int(self.sliders[-1].value)
             ########### 參數update ##########
             #################################
 
@@ -176,29 +181,29 @@ class Bird:
         self.f.x = 0
         self.f.y = 0
 
-        # 查詢鄰居
-        query_point = [self.p.x, self.p.y]
-        indices = tree.query_ball_point(query_point, config.Sight)
+        #KDtree 搜尋
+        target_point = [self.p.x, self.p.y]
+        indices = tree.query_ball_point(target_point, config.Sight)
 
         alignment_total = pg.Vector2(0, 0)
         cohesion_total = pg.Vector2(0, 0)
         separation_total = pg.Vector2(0, 0)
         total = 0
 
-        for idx in indices:
-            bird_idx = idx % len(self.pattern.flock)  # 真實的鳥索引
-            bird = self.pattern.flock[bird_idx]
-            if bird == self:
+        for index in indices:
+            neighbor_index = index % len(self.pattern.flock)  # 偏移鳥索引 -> 原鳥索引
+            neighbor = self.pattern.flock[neighbor_index]
+            if neighbor == self:
                 continue
 
-            offset = offsets[idx]  # 平移偏移量
-            vector = self.get_distance([bird.p.x, bird.p.y], offset)
+            offset = offsets[index]  # 平移偏移量
+            vector = self.get_distance([neighbor.p.x, neighbor.p.y], offset)
             distance = vector.length()
 
             if distance < config.Sight and distance > 0:
                 total += 1
 
-                alignment_total += bird.v
+                alignment_total += neighbor.v
                 cohesion_total += vector
                 separation_total += -vector / (distance ** 2) * config.Sight
 
@@ -256,14 +261,14 @@ class Birds:
         positions = np.array([[bird.p.x, bird.p.y] for bird in self.flock])
         N = len(self.flock)
 
-        # 螢幕外虛擬位置
+        # 螢幕外虛擬位置偏移
         offsets = np.array([[0, 0],
                             [1, 0], [-1, 0],
                             [0, 1], [0, -1],
                             [1, 1], [-1, -1],
                             [1, -1], [-1, 1]])
-        all_positions = []
-        all_offsets = []
+        all_positions = [] #所有位置
+        all_offsets = []  #偏一輛
 
         for offset in offsets:
             shifted_positions = positions + offset * np.array(config.MonitorSize)
@@ -293,7 +298,7 @@ if __name__ == "__main__":
         Color.white = (25, 25, 25)
         Color.black = (220,220,220)
         
-    config.MonitorSize = (pg.display.Info().current_w, pg.display.Info().current_h)
+    config.MonitorSize = (pg.display.Info().current_w, pg.display.Info().current_h-50)
     g = Game()
     Specie_A = Birds(config.BirdNumber,Color.black)
     #Specie_B = Birds(config.BirdNumber,flock_Color=Color.blue)
