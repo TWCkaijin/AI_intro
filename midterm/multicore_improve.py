@@ -82,7 +82,6 @@ class Slider:
 
 class Game:
     def __init__(self):
-        pg.init()
         self.screen = pg.display.set_mode(config.MonitorSize, pg.RESIZABLE)
         self.running = True
         self.clock = pg.time.Clock()
@@ -92,7 +91,7 @@ class Game:
             Slider(10, 50, 100, 10, -1.0, 3.0, config.alignmentFactor, "Alignment"),
             Slider(10, 80, 100, 10, -2.0, 2.0, config.cohesionFactor, "Cohesion"),
             Slider(10, 110, 100, 10, 0, 5.0, config.separationFactor, "Separation"),
-            Slider(10, 140, 100, 10, 0, 80, config.Sight, "Bird Sight",show_float=False),
+            Slider(10, 140, 100, 10, 20, 150, config.Sight, "Bird Sight",show_float=False),
             Slider(10, 170, 100, 10, 0, 8, config.MaxVel, "speed"),
             Slider(10, 210, 100, 10, 0, 500, config.BirdNumber, "Bird Number",show_float=False)
         ]
@@ -285,6 +284,7 @@ class Birds:
             executor.map(lambda b: b.draw(screen), self.flock)
 
 if __name__ == "__main__":
+    pg.init()
     mode = "light"
     if mode == "light":
         Color.white = (220,220,220)
@@ -292,8 +292,10 @@ if __name__ == "__main__":
     elif mode == "dark":
         Color.white = (25, 25, 25)
         Color.black = (220,220,220)
-
+        
+    config.MonitorSize = (pg.display.Info().current_w, pg.display.Info().current_h)
     g = Game()
     Specie_A = Birds(config.BirdNumber,Color.black)
     #Specie_B = Birds(config.BirdNumber,flock_Color=Color.blue)
+    
     g.run(Specie_A)
